@@ -9,6 +9,7 @@ import {
 } from "react";
 import { AudioEngine } from "./audio";
 import { creatorAutopilotInput } from "./autopilot";
+import { getNovaFeedbackTier } from "./gameFeel";
 import {
   challengeFromResult,
   compactSeed,
@@ -31,7 +32,14 @@ import {
   type ShareOutcome,
 } from "./resultCard";
 import { GameSimulation } from "./simulation";
-import { formatElapsed, resultStatus } from "./uiLogic";
+import {
+  formatElapsed,
+  getFirstRunOnboardingStage,
+  getPhaseInstruction,
+  getResultRetryTip,
+  resultStatus,
+  type FirstRunOnboardingStage,
+} from "./uiLogic";
 import {
   FIXED_STEP,
   PHASES,
@@ -46,10 +54,15 @@ interface HudState {
   phaseIndex: number;
   phaseTime: number;
   elapsed: number;
+  cycle: number;
   score: number;
+  bankedScore: number;
+  unbankedFlux: number;
   combo: number;
-  flux: number;
   charge: number;
+  capturedCount: number;
+  novaCount: number;
+  largestChain: number;
   stability: number;
   seed: number;
   runComplete: boolean;
@@ -61,10 +74,15 @@ const INITIAL_HUD: HudState = {
   phaseIndex: 0,
   phaseTime: 0,
   elapsed: 0,
+  cycle: 0,
   score: 0,
+  bankedScore: 0,
+  unbankedFlux: 0,
   combo: 1,
-  flux: 0,
   charge: 0,
+  capturedCount: 0,
+  novaCount: 0,
+  largestChain: 0,
   stability: 3,
   seed: 0,
   runComplete: false,
@@ -72,6 +90,25 @@ const INITIAL_HUD: HudState = {
 };
 
 type CreatorFrame = "auto" | "landscape" | "portrait";
+type OnboardingStage = FirstRunOnboardingStage | "bank";
+type FeedbackTone = "cold" | "solar" | "danger" | "chain";
+
+interface LiveFeedback {
+  id: number;
+  text: string;
+  detail?: string;
+  tone: FeedbackTone;
+}
+
+interface ResultDetails {
+  bankedScore: number;
+  liveFlux: number;
+  energyCollected: number;
+  largestChain: number;
+  nearMisses: number;
+  novas: number;
+  collisions: number;
+}
 
 interface StartOptions {
   seed?: number;
@@ -90,14 +127,6 @@ interface GamePreferences {
 const SHOWCASE_SEED = 0x50_1a_7e_56;
 const TARGET_RENDER_MS = 1_000 / 60;
 const AUDIO_UPDATE_MS = 50;
-const PHASE_RULES = [
-  "MASS CURVES",
-  "MATTER BREAKS",
-  "SPACE FLOWS",
-  "THE PAST RETURNS",
-  "MANY THINK AS ONE",
-  "ALL LAWS COLLAPSE",
-] as const;
 const PHASE_CODES = ["O", "F", "W", "E", "S", "N"] as const;
 
 function deriveQuality(reducedMotion: boolean): RenderQuality {
@@ -154,18 +183,28 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 }
 
 function toHud(snapshot: GameSnapshot): HudState {
+  let capturedCount = 0;
+  for (const entity of snapshot.entities) {
+    if (!entity.captured) continue;
+    capturedCount += 1;
+  }
   return {
     status: snapshot.status,
     phaseIndex: snapshot.phaseIndex,
     phaseTime: snapshot.phaseTime,
     elapsed: snapshot.elapsed,
+    cycle: snapshot.cycle,
     score: Math.floor(snapshot.metrics.score),
+    bankedScore: Math.floor(snapshot.metrics.bankedScore),
+    unbankedFlux: Math.floor(snapshot.metrics.unbankedFlux),
     combo: 1 + Math.min(
       2,
       Math.floor(Math.max(0, snapshot.metrics.combo - 1) / 3) * 0.2,
     ),
-    flux: snapshot.metrics.unbankedFlux,
     charge: snapshot.core.charge,
+    capturedCount,
+    novaCount: snapshot.metrics.novaCount,
+    largestChain: snapshot.metrics.largestChain,
     stability: snapshot.core.stability,
     seed: snapshot.seed,
     runComplete: snapshot.runComplete,
@@ -198,6 +237,13 @@ export function SolShiftGame() {
   const autoPilotInputRef = useRef<InputState>(makeInput());
   const slowMotionRef = useRef(false);
   const resultKeyRef = useRef("");
+  const awaitingFirstInputRef = useRef(false);
+  const onboardingStageRef = useRef<OnboardingStage>("pull");
+  const onboardingBankUntilTickRef = useRef(0);
+  const onboardingCapturedAtTickRef = useRef(-1);
+  const bankLessonPendingRef = useRef(false);
+  const coreLoopLearnedRef = useRef(false);
+  const feedbackIdRef = useRef(0);
   const historyRef = useRef<RunHistory | null>(null);
   const preferencesRef = useRef<SafeStorageAdapter | null>(null);
   const pausePanelRef = useRef<HTMLElement>(null);
@@ -211,10 +257,15 @@ export function SolShiftGame() {
       ? matchMedia("(prefers-reduced-motion: reduce)").matches
       : false,
   );
-  const [showControls, setShowControls] = useState(true);
+  const [awaitingFirstInput, setAwaitingFirstInput] = useState(false);
+  const [coreLoopLearned, setCoreLoopLearned] = useState(false);
+  const [onboardingStage, setOnboardingStage] = useState<OnboardingStage>("pull");
+  const [feedback, setFeedback] = useState<LiveFeedback | null>(null);
   const [paused, setPaused] = useState(false);
   const [challenge, setChallenge] = useState<Challenge | null>(null);
+  const [runPersonalBest, setRunPersonalBest] = useState<number | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
+  const [resultDetails, setResultDetails] = useState<ResultDetails | null>(null);
   const [resultImage, setResultImage] = useState<Blob | null>(null);
   const [shareStatus, setShareStatus] = useState<ShareOutcome | "ready">("ready");
   const [creatorOpen, setCreatorOpen] = useState(false);
@@ -231,6 +282,14 @@ export function SolShiftGame() {
   if (historyRef.current === null) historyRef.current = new RunHistory();
   if (preferencesRef.current === null) preferencesRef.current = new SafeStorageAdapter();
 
+  const beginActiveRun = useCallback(() => {
+    if (!awaitingFirstInputRef.current) return;
+    awaitingFirstInputRef.current = false;
+    setAwaitingFirstInput(false);
+    accumulatorRef.current = 0;
+    lastFrameRef.current = performance.now();
+  }, []);
+
   useEffect(() => {
     autoPilotRef.current = autoPilot;
   }, [autoPilot]);
@@ -245,6 +304,12 @@ export function SolShiftGame() {
       "preferences",
       isGamePreferences,
     );
+    const learnedCoreLoop = preferencesRef.current?.read<boolean>(
+      "core-loop-learned",
+      (value): value is boolean => value === true || value === false,
+    ) === true;
+    coreLoopLearnedRef.current = learnedCoreLoop;
+    setCoreLoopLearned(learnedCoreLoop);
     if (stored) {
       setMuted(stored.muted);
       setVolume(stored.volume);
@@ -310,14 +375,35 @@ export function SolShiftGame() {
       renderAccumulatorRef.current += elapsedMs;
       audioAccumulatorRef.current += elapsedMs;
 
-      if (simulation.getStatus() === "playing" && !pausedRef.current) {
+      if (
+        simulation.getStatus() === "playing"
+        && !pausedRef.current
+        && !awaitingFirstInputRef.current
+      ) {
         accumulatorRef.current += frameSeconds;
+        let frameFeedbackPriority = -1;
+        let frameFeedbackText = "";
+        let frameFeedbackTone: FeedbackTone = "cold";
+        let frameFeedbackDetail: string | undefined;
+        const proposeFrameFeedback = (
+          priority: number,
+          text: string,
+          tone: FeedbackTone,
+          detail?: string,
+        ) => {
+          if (frameFeedbackPriority > priority) return;
+          frameFeedbackPriority = priority;
+          frameFeedbackText = text;
+          frameFeedbackTone = tone;
+          frameFeedbackDetail = detail;
+        };
         let safety = 0;
         while (accumulatorRef.current >= FIXED_STEP && safety < 8) {
           let activeInput = inputRef.current;
           if (autoPilotRef.current) {
+            const beforeSnapshot = simulation.getRenderSnapshot();
             activeInput = creatorAutopilotInput(
-              simulation.getRenderSnapshot(),
+              beforeSnapshot,
               autoPilotInputRef.current,
             );
             autoPilotInputRef.current = activeInput;
@@ -326,6 +412,118 @@ export function SolShiftGame() {
           if (events.length) {
             renderer.handleEvents(events);
             audio.handleEvents(events);
+
+            for (const event of events) {
+              if (event.type === "collect") {
+                proposeFrameFeedback(
+                  1,
+                  `+${event.awarded} FLUX`,
+                  "cold",
+                  "KEEP IT SAFE · CROSS A RING",
+                );
+              } else if (event.type === "nova") {
+                const novaTier = getNovaFeedbackTier(event.strength, event.captured);
+                if (novaTier === "loaded") {
+                  proposeFrameFeedback(
+                    3,
+                    `NOVA · MASS ${event.captured}`,
+                    "solar",
+                    event.strength >= 0.8 ? "FULL RELEASE" : "LOADED RELEASE",
+                  );
+                  if (!coreLoopLearnedRef.current) {
+                    const afterTick = simulation.getRenderSnapshot().tick;
+                    bankLessonPendingRef.current = true;
+                    onboardingStageRef.current = "bank";
+                    onboardingBankUntilTickRef.current = afterTick + 240;
+                    setOnboardingStage("bank");
+                  }
+                } else if (novaTier === "charged") {
+                  proposeFrameFeedback(
+                    2,
+                    "CHARGED NOVA",
+                    "solar",
+                    "CAPTURE MASS FOR FULL FORCE",
+                  );
+                } else if (!coreLoopLearnedRef.current) {
+                  proposeFrameFeedback(2, "EMPTY NOVA", "cold", "HOLD NEAR MATTER FIRST");
+                }
+              } else if (event.type === "fracture") {
+                proposeFrameFeedback(
+                  5,
+                  `CASCADE · DEPTH ${Math.max(1, event.chain)}`,
+                  "chain",
+                  "CRYSTALS BREAKING",
+                );
+              } else if (event.type === "gate") {
+                proposeFrameFeedback(
+                  6,
+                  event.banked > 0 ? `BANKED +${event.banked}` : "FLUX BANKED",
+                  "solar",
+                  "SCORE SECURED",
+                );
+                if (bankLessonPendingRef.current && !coreLoopLearnedRef.current) {
+                  bankLessonPendingRef.current = false;
+                  coreLoopLearnedRef.current = true;
+                  setCoreLoopLearned(true);
+                  preferencesRef.current?.write("core-loop-learned", true);
+                  onboardingStageRef.current = "complete";
+                  setOnboardingStage("complete");
+                }
+              } else if (event.type === "near-miss") {
+                proposeFrameFeedback(
+                  2,
+                  `NEAR MISS · +${event.awarded}`,
+                  "solar",
+                  "DANGER CONVERTED",
+                );
+              } else if (event.type === "hit") {
+                proposeFrameFeedback(
+                  7,
+                  event.lostFlux > 0 ? `−${Math.floor(event.lostFlux)} FLUX` : "CORE HIT",
+                  "danger",
+                  event.lostFlux > 0 ? "UNBANKED SCORE LOST" : `${event.stability} STABILITY LEFT`,
+                );
+              } else if (event.type === "complete") {
+                proposeFrameFeedback(8, "SHIFT SURVIVED", "solar", "ALL SIX LAWS CLEARED");
+              }
+            }
+          }
+
+          if (!creatorRunRef.current && onboardingStageRef.current !== "complete") {
+            const guidanceSnapshot = simulation.getRenderSnapshot();
+            if (onboardingStageRef.current === "bank") {
+              if (guidanceSnapshot.tick >= onboardingBankUntilTickRef.current) {
+                onboardingStageRef.current = "complete";
+                setOnboardingStage("complete");
+              }
+            } else if (!coreLoopLearnedRef.current) {
+              let capturedCount = 0;
+              for (const entity of guidanceSnapshot.entities) {
+                if (entity.captured) capturedCount += 1;
+              }
+              if (
+                onboardingStageRef.current === "pull"
+                && capturedCount > 0
+                && onboardingCapturedAtTickRef.current < 0
+              ) {
+                onboardingCapturedAtTickRef.current = guidanceSnapshot.tick;
+              }
+              const previousStage = onboardingStageRef.current as FirstRunOnboardingStage;
+              const nextStage = getFirstRunOnboardingStage({
+                elapsedSeconds: onboardingCapturedAtTickRef.current < 0
+                  ? 0
+                  : (guidanceSnapshot.tick - onboardingCapturedAtTickRef.current) * FIXED_STEP,
+                inputActive: activeInput.active,
+                capturedCount,
+                charge: guidanceSnapshot.core.charge,
+                novaCount: 0,
+                previousStage,
+              });
+              if (nextStage !== onboardingStageRef.current) {
+                onboardingStageRef.current = nextStage;
+                setOnboardingStage(nextStage);
+              }
+            }
           }
           if (!autoPilotRef.current) {
             inputRef.current.justPressed = false;
@@ -336,6 +534,15 @@ export function SolShiftGame() {
           }
           accumulatorRef.current -= FIXED_STEP;
           safety += 1;
+        }
+        if (frameFeedbackPriority >= 0) {
+          feedbackIdRef.current += 1;
+          setFeedback({
+            id: feedbackIdRef.current,
+            text: frameFeedbackText,
+            tone: frameFeedbackTone,
+            ...(frameFeedbackDetail ? { detail: frameFeedbackDetail } : {}),
+          });
         }
       }
 
@@ -390,6 +597,15 @@ export function SolShiftGame() {
               : { challengerTarget: challengerTargetRef.current }),
           });
           setResult(completedResult);
+          setResultDetails({
+            bankedScore: Math.floor(snapshot.metrics.bankedScore),
+            liveFlux: Math.floor(snapshot.metrics.unbankedFlux),
+            energyCollected: snapshot.metrics.energyCollected,
+            largestChain: snapshot.metrics.largestChain,
+            nearMisses: snapshot.metrics.nearMisses,
+            novas: snapshot.metrics.novaCount,
+            collisions: snapshot.metrics.collisions,
+          });
           setResultImage(null);
           setShareStatus("ready");
         }
@@ -430,6 +646,9 @@ export function SolShiftGame() {
         ? dailySeed
         : (Date.now() ^ Math.floor(performance.now() * 1000)) >>> 0);
       const isCreator = options.creator === true;
+      const previousBest = isCreator
+        ? null
+        : historyRef.current?.get(nextMode, seed).personalBest ?? null;
       runModeRef.current = nextMode;
       runSeedRef.current = seed;
       creatorRunRef.current = isCreator;
@@ -439,17 +658,37 @@ export function SolShiftGame() {
       if (options.phase !== undefined) {
         simulation.forcePhase(options.phase, options.phaseTick);
       }
-      inputRef.current = makeInput();
-      autoPilotInputRef.current = makeInput();
+      const initialSnapshot = simulation.getRenderSnapshot();
+      keysRef.current.clear();
+      spaceHeldRef.current = false;
+      const initialInput = makeInput();
+      initialInput.target.x = initialSnapshot.core.x;
+      initialInput.target.y = initialSnapshot.core.y;
+      inputRef.current = initialInput;
+      const initialAutoInput = makeInput();
+      initialAutoInput.target.x = initialSnapshot.core.x;
+      initialAutoInput.target.y = initialSnapshot.core.y;
+      autoPilotInputRef.current = initialAutoInput;
       accumulatorRef.current = 0;
       renderAccumulatorRef.current = TARGET_RENDER_MS;
       audioAccumulatorRef.current = AUDIO_UPDATE_MS;
       lastHudTickRef.current = -1;
       lastHudStatusRef.current = "playing";
+      const needsOnboarding = !isCreator && !coreLoopLearnedRef.current;
+      const initialGuidance: OnboardingStage = needsOnboarding ? "pull" : "complete";
+      awaitingFirstInputRef.current = !isCreator;
+      onboardingStageRef.current = initialGuidance;
+      onboardingBankUntilTickRef.current = 0;
+      onboardingCapturedAtTickRef.current = -1;
+      bankLessonPendingRef.current = false;
       setPaused(false);
-      setHud(toHud(simulation.getRenderSnapshot()));
-      setShowControls(true);
+      setHud(toHud(initialSnapshot));
+      setAwaitingFirstInput(!isCreator);
+      setOnboardingStage(initialGuidance);
+      setFeedback(null);
+      setRunPersonalBest(previousBest);
       setResult(null);
+      setResultDetails(null);
       setResultImage(null);
       setShareStatus("ready");
       setCreatorOpen(isCreator);
@@ -536,12 +775,12 @@ export function SolShiftGame() {
       if (hud.status !== "playing" || paused || !event.isPrimary) return;
       event.currentTarget.setPointerCapture(event.pointerId);
       updatePointerTarget(event);
+      beginActiveRun();
       inputRef.current.active = true;
       inputRef.current.justPressed = true;
       inputRef.current.justReleased = false;
-      setShowControls(false);
     },
-    [hud.status, paused, updatePointerTarget],
+    [beginActiveRun, hud.status, paused, updatePointerTarget],
   );
 
   const onPointerMove = useCallback(
@@ -564,6 +803,7 @@ export function SolShiftGame() {
     inputRef.current.active = false;
     inputRef.current.justPressed = false;
     inputRef.current.justReleased = false;
+    simulationRef.current?.cancelInput();
   }, []);
 
   const clearLatchedInput = useCallback(() => {
@@ -574,6 +814,7 @@ export function SolShiftGame() {
     inputRef.current.active = false;
     inputRef.current.justPressed = false;
     inputRef.current.justReleased = false;
+    simulationRef.current?.cancelInput();
   }, []);
 
   useEffect(() => {
@@ -671,15 +912,17 @@ export function SolShiftGame() {
       if (hud.status !== "playing" || paused) return;
       if (event.code === "Space" && !event.repeat) {
         event.preventDefault();
+        beginActiveRun();
         spaceHeldRef.current = true;
         inputRef.current.active = true;
         inputRef.current.justPressed = true;
+        inputRef.current.justReleased = false;
         inputRef.current.pointerType = "keyboard";
-        setShowControls(false);
         return;
       }
       if (event.code in directions) {
         event.preventDefault();
+        beginActiveRun();
         keysRef.current.add(event.code);
         recalculate();
       }
@@ -701,7 +944,7 @@ export function SolShiftGame() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [challenge, creatorOpen, dailySeed, enterCreator, hud.status, jumpToCreatorPhase, mode, paused, startRun]);
+  }, [beginActiveRun, challenge, creatorOpen, dailySeed, enterCreator, hud.status, jumpToCreatorPhase, mode, paused, startRun]);
 
   useEffect(() => {
     audioRef.current?.setMuted(muted);
@@ -710,6 +953,12 @@ export function SolShiftGame() {
   useEffect(() => {
     audioRef.current?.setVolume(volume);
   }, [volume]);
+
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 1_350);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
 
   useEffect(() => {
     if (!result) return;
@@ -864,12 +1113,64 @@ export function SolShiftGame() {
   }, [creatorOpen, ensureResultImage, result, resultChallengeUrl]);
 
   const phase = PHASES[Math.max(0, Math.min(PHASES.length - 1, hud.phaseIndex))];
+  const phaseInstruction = getPhaseInstruction(hud.phaseIndex);
   const secondsLeft = Math.max(0, Math.ceil(60 - hud.elapsed));
   const displayedTime = mode === "endless"
     ? formatElapsed(hud.elapsed)
     : String(secondsLeft).padStart(2, "0");
   const isMenu = hud.status === "menu";
   const isResult = hud.status === "results";
+  const challengeDelta = challenge ? hud.score - challenge.target : null;
+  const challengeProgress = challenge
+    ? challenge.target <= 0
+      ? hud.score >= challenge.target ? 1 : 0
+      : Math.min(1, Math.max(0, hud.score / challenge.target))
+    : 0;
+  const personalBestDelta = runPersonalBest === null ? null : hud.score - runPersonalBest;
+  const personalBestProgress = runPersonalBest === null
+    ? 0
+    : runPersonalBest <= 0
+      ? hud.score >= runPersonalBest ? 1 : 0
+      : Math.min(1, Math.max(0, hud.score / runPersonalBest));
+  const guidance = awaitingFirstInput
+    ? {
+        title: coreLoopLearned ? "HOLD TO IGNITE" : "HOLD + DRAG · PULL BLUE MATTER",
+        detail: mode === "daily" ? "THE 60s CLOCK STARTS ON INPUT" : "THE CLOCK STARTS ON INPUT",
+        stage: "ready",
+      }
+    : onboardingStage === "pull"
+      ? { title: "HOLD + DRAG · PULL BLUE MATTER", detail: "CYAN MATTER CAN BE CAPTURED", stage: "pull" }
+      : onboardingStage === "captured"
+        ? { title: "MASS CAPTURED · KEEP HOLDING", detail: "CHARGE THE FIELD", stage: "captured" }
+        : onboardingStage === "release"
+          ? { title: "RELEASE · NOVA", detail: "LOADED NOVAS HIT HARDER", stage: "release" }
+          : onboardingStage === "bank"
+            ? { title: "CROSS A RING · BANK FLUX", detail: "A HIT WIPES UNBANKED SCORE", stage: "bank" }
+            : null;
+  const showPhaseDirective = !awaitingFirstInput
+    && onboardingStage === "complete"
+    && hud.phaseTime < 2.6
+    && hud.elapsed > 0.1;
+  const currentResultScore = result?.score ?? hud.score;
+  const challengerGoal = result?.challengerTarget ?? null;
+  const nextScoreTarget = challengerGoal !== null && challengerGoal > currentResultScore
+    ? challengerGoal
+    : Math.max(currentResultScore, runPersonalBest ?? 0);
+  const nextTargetCopy = nextScoreTarget > 0
+    ? `BEAT ${nextScoreTarget.toLocaleString("en-US")}`
+    : "SCORE 1+";
+  const retryTip = getResultRetryTip(result, hud.deathReason);
+  const resultGrades = result?.phaseGrades ?? [0, 0, 0, 0, 0, 0];
+  const reachedPhase = Math.max(0, Math.min(5, Math.floor((result?.survivalSeconds ?? hud.elapsed) / 10)));
+  let weakestPhase = 0;
+  let weakestGrade = Number.POSITIVE_INFINITY;
+  for (let index = 0; index <= reachedPhase; index += 1) {
+    const grade = resultGrades[index] ?? 0;
+    if (grade < weakestGrade) {
+      weakestGrade = grade;
+      weakestPhase = index;
+    }
+  }
 
   return (
     <main className={`game-shell creator-frame-${creatorFrame} ${reducedMotion ? "is-reduced-motion" : ""}`}>
@@ -891,15 +1192,26 @@ export function SolShiftGame() {
             <div className="hud-score">
               <span className="hud-label">SCORE</span>
               <strong>{hud.score.toLocaleString("en-US")}</strong>
-              <span className={`combo ${hud.combo > 1 ? "is-live" : ""}`}>
-                ×{hud.combo.toFixed(hud.combo < 10 ? 1 : 0)}
-              </span>
+              <div className="score-ledger">
+                <span>BANK {hud.bankedScore.toLocaleString("en-US")}</span>
+                <span className={hud.unbankedFlux > 0 ? "is-risk" : ""}>
+                  FLUX +{hud.unbankedFlux.toLocaleString("en-US")}
+                </span>
+                <span className={`combo ${hud.combo > 1 ? "is-live" : ""}`}>
+                  MULTIPLIER ×{hud.combo.toFixed(hud.combo < 10 ? 1 : 0)}
+                </span>
+                {(hud.charge > 0.025 || hud.capturedCount > 0) && (
+                  <span className={hud.capturedCount > 0 ? "field-load is-loaded" : "field-load"}>
+                    LOAD {Math.round(hud.charge * 100)}% · MASS {hud.capturedCount}
+                  </span>
+                )}
+              </div>
             </div>
             <div className="hud-phase" aria-live="polite">
               <span className="phase-index">0{hud.phaseIndex + 1}</span>
               <strong>{phase}</strong>
               <span className="phase-rule">
-                {PHASE_RULES[hud.phaseIndex]}
+                {phaseInstruction}
               </span>
               <i style={{ transform: `scaleX(${Math.min(1, hud.phaseTime / 10)})` }} />
             </div>
@@ -910,15 +1222,94 @@ export function SolShiftGame() {
                 {[0, 1, 2].map((value) => (
                   <i key={value} className={value < hud.stability ? "is-on" : ""} />
                 ))}
+                <b>CORE {hud.stability}</b>
               </span>
             </div>
           </header>
         )}
 
         {challenge && !isMenu && !isResult && !creatorOpen && !cleanHud && (
-          <div className="challenge-target" aria-label={`Challenger target ${challenge.target}`}>
-            <span>TARGET</span>
-            <strong>{challenge.target.toLocaleString("en-US")}</strong>
+          <div
+            className={`challenge-target ${challengeDelta !== null && challengeDelta > 0 ? "is-beaten" : ""}`}
+            aria-label={`Challenger target ${challenge.target}`}
+          >
+            <div>
+              <span>
+                {challengeDelta !== null && challengeDelta > 0
+                  ? "TARGET BEAT"
+                  : challengeDelta === 0
+                    ? "TARGET TIED"
+                    : "TARGET"}
+              </span>
+              <strong>{challenge.target.toLocaleString("en-US")}</strong>
+              <b>
+                {challengeDelta === null
+                  ? ""
+                  : challengeDelta > 0
+                    ? `+${challengeDelta.toLocaleString("en-US")}`
+                    : challengeDelta === 0
+                      ? "TIED"
+                      : `−${Math.abs(challengeDelta).toLocaleString("en-US")}`}
+              </b>
+            </div>
+            <i><b style={{ transform: `scaleX(${challengeProgress})` }} /></i>
+          </div>
+        )}
+
+        {!challenge && runPersonalBest !== null && !isMenu && !isResult && !creatorOpen && !cleanHud && (
+          <div
+            className={`challenge-target personal-best-target ${personalBestDelta !== null && personalBestDelta > 0 ? "is-beaten" : ""}`}
+            aria-label={`Personal best ${runPersonalBest}`}
+          >
+            <div>
+              <span>{personalBestDelta !== null && personalBestDelta > 0 ? "NEW PB" : "PERSONAL BEST"}</span>
+              <strong>{runPersonalBest.toLocaleString("en-US")}</strong>
+              <b>
+                {personalBestDelta === null
+                  ? ""
+                  : personalBestDelta > 0
+                    ? `+${personalBestDelta.toLocaleString("en-US")}`
+                    : personalBestDelta === 0
+                      ? "TIED"
+                      : `−${Math.abs(personalBestDelta).toLocaleString("en-US")}`}
+              </b>
+            </div>
+            <i><b style={{ transform: `scaleX(${personalBestProgress})` }} /></i>
+          </div>
+        )}
+
+        {feedback && hud.status === "playing" && !cleanHud && (
+          <div
+            key={feedback.id}
+            className={`live-feedback is-${feedback.tone}`}
+            role="status"
+            aria-live="polite"
+          >
+            <strong>{feedback.text}</strong>
+            {feedback.detail && <span>{feedback.detail}</span>}
+          </div>
+        )}
+
+        {guidance && hud.status === "playing" && !paused && !cleanHud && !autoPilot && (
+          <div className={`control-ghost is-${guidance.stage}`} role="status" aria-live="polite">
+            <span className="gesture-orbit"><i /></span>
+            <strong>{guidance.title}</strong>
+            <small>{guidance.detail}</small>
+            <span className="guidance-loop" aria-hidden="true">
+              <b className={guidance.stage === "pull" || guidance.stage === "ready" ? "is-current" : "is-done"}>PULL</b>
+              <i>→</i>
+              <b className={guidance.stage === "captured" || guidance.stage === "release" ? "is-current" : guidance.stage === "bank" ? "is-done" : ""}>NOVA</b>
+              <i>→</i>
+              <b className={guidance.stage === "bank" ? "is-current" : ""}>BANK</b>
+            </span>
+          </div>
+        )}
+
+        {showPhaseDirective && !cleanHud && (
+          <div key={`${hud.phaseIndex}-${hud.cycle}`} className="phase-directive" aria-live="polite">
+            <span>LAW 0{hud.phaseIndex + 1}</span>
+            <strong>{phase}</strong>
+            <small>{phaseInstruction}</small>
           </div>
         )}
 
@@ -949,14 +1340,6 @@ export function SolShiftGame() {
                 {paused ? "▶" : "Ⅱ"}
               </button>
             )}
-          </div>
-        )}
-
-        {showControls && hud.status === "playing" && !paused && !cleanHud && !autoPilot && (
-          <div className="control-ghost" aria-hidden="true">
-            <span className="gesture-orbit"><i /></span>
-            <strong>HOLD · BEND SPACE</strong>
-            <small>MOVE · RELEASE NOVA</small>
           </div>
         )}
 
@@ -1009,7 +1392,7 @@ export function SolShiftGame() {
             <div className="brand-lockup">
               <span className="brand-kicker"><i /> PHYSICS SURVIVAL // 60 SECONDS</span>
               <h1 id="game-title">SOL<span>{"//"}</span>SHIFT</h1>
-              <p>Survive while the laws of physics mutate around you.</p>
+              <p>Capture mass. Detonate Novas. Bank Flux. Survive six laws in 60 seconds.</p>
             </div>
 
             <div className="mode-card">
@@ -1026,6 +1409,13 @@ export function SolShiftGame() {
                     {challenge.archetype ? `${challenge.archetype} left this universe for you.` : "A challenger left this universe for you."}
                     {" "}Same seed. Same laws. Your move.
                   </p>
+                  <div className="core-loop" aria-label="How to score">
+                    <span><b>01 · PULL</b><small>Hold near cyan matter</small></span>
+                    <i>→</i>
+                    <span><b>02 · NOVA</b><small>Release captured mass</small></span>
+                    <i>→</i>
+                    <span><b>03 · BANK</b><small>Cross a ring to secure Flux</small></span>
+                  </div>
                   <button
                     className="primary-button"
                     type="button"
@@ -1035,7 +1425,7 @@ export function SolShiftGame() {
                       challengerTarget: challenge.target,
                     })}
                   >
-                    <span>CHASE THE SIGNAL</span>
+                    <span>START 60s CHALLENGE</span>
                     <i>↗</i>
                   </button>
                   <button
@@ -1052,7 +1442,14 @@ export function SolShiftGame() {
               ) : (
                 <>
                   <h2>DAILY SHIFT</h2>
-                  <p>Same six laws. Same seed. Everyone gets one universe—and unlimited attempts.</p>
+                  <p>Everyone plays the same universe. Unlimited attempts. Chase your best score.</p>
+                  <div className="core-loop" aria-label="How to score">
+                    <span><b>01 · PULL</b><small>Hold near cyan matter</small></span>
+                    <i>→</i>
+                    <span><b>02 · NOVA</b><small>Release captured mass</small></span>
+                    <i>→</i>
+                    <span><b>03 · BANK</b><small>Cross a ring to secure Flux</small></span>
+                  </div>
                   <button
                     className="primary-button"
                     type="button"
@@ -1062,15 +1459,16 @@ export function SolShiftGame() {
                       challengerTarget: null,
                     })}
                   >
-                    <span>ENTER THE FIELD</span>
+                    <span>START 60s SHIFT</span>
                     <i>↗</i>
                   </button>
                   <button
                     className="secondary-button"
                     type="button"
+                    aria-label="Endless Shift — escalating laws with no finish"
                     onClick={() => void startRun("endless", { challengerTarget: null })}
                   >
-                    ENDLESS SHIFT <span>∞</span>
+                    ENDLESS SHIFT <span>∞</span><small>ESCALATING · NO FINISH</small>
                   </button>
                 </>
               )}
@@ -1081,7 +1479,7 @@ export function SolShiftGame() {
 
             <div className="menu-controls" aria-label="Controls">
               <span><b>MOVE</b> pointer · touch · WASD</span>
-              <span><b>HOLD</b> attract</span>
+              <span><b>HOLD / SPACE</b> attract</span>
               <span><b>RELEASE</b> Nova</span>
             </div>
           </section>
@@ -1181,16 +1579,32 @@ export function SolShiftGame() {
             </h2>
             <div className="result-score">
               <span>FINAL SCORE</span>
-              <strong>{(result?.score ?? hud.score).toLocaleString("en-US")}</strong>
+              <strong>{currentResultScore.toLocaleString("en-US")}</strong>
+              {!creatorOpen && <small>NEXT · {nextTargetCopy}</small>}
             </div>
             <div className="result-identity">
               <strong>{result?.archetype ?? "Orbit Architect"}</strong>
               <span>{(result?.survivalSeconds ?? hud.elapsed).toFixed(1)}s · BEST COMBO {result?.bestCombo ?? 0}</span>
             </div>
+            <div className="result-metrics" aria-label="Run breakdown">
+              <span><b>BANKED</b><strong>{(resultDetails?.bankedScore ?? 0).toLocaleString("en-US")}</strong></span>
+              <span className={(resultDetails?.liveFlux ?? 0) > 0 ? "is-risk" : ""}>
+                <b>LIVE FLUX</b><strong>+{(resultDetails?.liveFlux ?? 0).toLocaleString("en-US")}</strong>
+              </span>
+              <span><b>CASCADE</b><strong>{resultDetails?.largestChain ?? 0}</strong></span>
+              <span><b>NOVAS</b><strong>{resultDetails?.novas ?? 0}</strong></span>
+            </div>
             <div className="shift-signature" aria-label={`Shift Signature ${result?.signature ?? "pending"}`}>
-              {(result?.phaseGrades ?? [0, 0, 0, 0, 0, 0]).map((grade, index) => (
-                <span key={PHASE_CODES[index]} className={grade >= 4 ? "is-hot" : ""}>
-                  <b>{PHASE_CODES[index]}</b>
+              {resultGrades.map((grade, index) => (
+                <span
+                  key={PHASE_CODES[index]}
+                  className={`${grade >= 4 ? "is-hot" : ""} ${index === weakestPhase && grade < 4 ? "is-weak" : ""}`}
+                  aria-label={`${PHASES[index]} grade ${grade}`}
+                >
+                  <b>
+                    <span className="phase-full">{PHASES[index]}</span>
+                    <span className="phase-short">{PHASE_CODES[index]}</span>
+                  </b>
                   <i>{grade}</i>
                 </span>
               ))}
@@ -1198,6 +1612,15 @@ export function SolShiftGame() {
             <p className="result-note">
               {resultStatus(result, hud.deathReason)}
             </p>
+            <div className="result-coaching">
+              <span>NEXT RUN</span>
+              <strong>{retryTip}</strong>
+              <small>
+                {(resultDetails?.collisions ?? 0) > 0
+                  ? `${resultDetails?.collisions ?? 0} HIT${(resultDetails?.collisions ?? 0) === 1 ? "" : "S"} · ${resultDetails?.nearMisses ?? 0} NEAR MISSES`
+                  : `${resultDetails?.energyCollected ?? 0} ENERGY · ${resultDetails?.nearMisses ?? 0} NEAR MISSES`}
+              </small>
+            </div>
             <div className="result-actions">
               <button
                 className="primary-button"
@@ -1209,7 +1632,7 @@ export function SolShiftGame() {
                   challengerTarget: creatorOpen ? null : result?.challengerTarget ?? null,
                 })}
               >
-                <span>{creatorOpen ? "RECORD AGAIN" : "SHIFT AGAIN"}</span><i>↗</i>
+                <span>{creatorOpen ? "RECORD AGAIN" : `RETRY · ${nextTargetCopy}`}</span><i>↗</i>
               </button>
               {!creatorOpen && (
                 <div className="share-actions">

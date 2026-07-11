@@ -1,4 +1,5 @@
 import type { GameEvent, GameSnapshot } from "./types";
+import { getNovaFeedbackTier } from "./gameFeel";
 
 const BPM = 96;
 const BEAT_SECONDS = 60 / BPM;
@@ -210,6 +211,8 @@ export class AudioEngine {
   private appliedPhase = -1;
   private pendingPhaseTransition = 0.65;
   private comboEnergy = 0;
+  private lastFractureSoundTime = -Infinity;
+  private fractureBurstPeak = 0;
 
   private manualPaused = false;
   private snapshotPaused = false;
@@ -747,6 +750,8 @@ export class AudioEngine {
     this.scheduledCycle = -1;
     this.nextBeat = -1;
     this.comboEnergy = 0;
+    this.lastFractureSoundTime = -Infinity;
+    this.fractureBurstPeak = 0;
     if (this.context) {
       this.phaseAudioOrigin =
         this.context.currentTime - snapshot.phaseTime / this.playbackRate;
@@ -994,17 +999,49 @@ export class AudioEngine {
     const now = context.currentTime + 0.004;
     const pan = this.panFor(x);
     const root = midiToFrequency(PHASE_SCORES[this.phaseIndex].root + 19);
-    const lift = 1 + clamp(value / 100, 0, 0.18);
+    const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
+    const bankValue = clamp((safeValue - 22) / 12);
+    const lift = 1 + bankValue * 0.08;
+
+    // A gate is the moment unbanked Flux becomes safe. Give it a warm body
+    // below the glassy confirmation so valuable banks feel materially larger
+    // without becoming a sharp notification sound.
+    this.duck(0.7 - bankValue * 0.1, 0.26 + bankValue * 0.08);
+    this.playTone({
+      frequency: midiToFrequency(PHASE_SCORES[this.phaseIndex].root - 12),
+      endFrequency: midiToFrequency(PHASE_SCORES[this.phaseIndex].root - 17),
+      duration: 0.34 + bankValue * 0.13,
+      gain: 0.072 + bankValue * 0.052,
+      when: now,
+      attack: 0.006,
+      waveform: "triangle",
+      pan: pan * 0.22,
+      filterFrequency: 1050,
+    });
     for (let index = 0; index < 3; index += 1) {
       this.playTone({
         frequency: root * lift * [1, 1.25, 1.5][index],
-        duration: 0.3 - index * 0.045,
-        gain: 0.045 - index * 0.007,
-        when: now + index * 0.032,
+        duration: 0.3 + bankValue * 0.08 - index * 0.04,
+        gain: 0.041 + bankValue * 0.018 - index * 0.006,
+        when: now + 0.018 + index * 0.038,
         attack: 0.008,
-        waveform: "sine",
+        waveform: index === 0 && bankValue > 0.5 ? "triangle" : "sine",
         pan: clamp(pan + (index - 1) * 0.16, -1, 1),
-        filterFrequency: 5200,
+        filterFrequency: 4300 + bankValue * 1200,
+      });
+    }
+
+    if (bankValue >= 0.58) {
+      this.playTone({
+        frequency: root * lift * 2,
+        endFrequency: root * lift * 2.012,
+        duration: 0.38,
+        gain: 0.035 + bankValue * 0.025,
+        when: now + 0.125,
+        attack: 0.018,
+        waveform: "sine",
+        pan: -pan * 0.45,
+        filterFrequency: 5700,
       });
     }
   }
@@ -1013,31 +1050,97 @@ export class AudioEngine {
     const context = this.context;
     if (!context) return;
     const now = context.currentTime + 0.004;
-    const power = clamp(strength, 0.2, 1.35);
-    const mass = clamp(captured / 10);
+    const power = clamp(Number.isFinite(strength) ? strength : 0.08, 0.08, 1.35);
+    const capturedCount = Number.isFinite(captured)
+      ? Math.max(0, Math.floor(captured))
+      : 0;
+    const tier = getNovaFeedbackTier(power, capturedCount);
     const pan = this.panFor(x) * 0.28;
 
-    this.duck(0.27, 0.58);
+    // Low-charge empty releases deliberately sputter. A fully charged release
+    // still earns a medium body, while captured mass unlocks the full impact.
+    if (tier === "empty") {
+      this.duck(0.82, 0.12);
+      this.playTone({
+        frequency: 132 + power * 20,
+        endFrequency: 68,
+        duration: 0.12 + power * 0.035,
+        gain: 0.028 + power * 0.014,
+        when: now,
+        attack: 0.002,
+        waveform: "triangle",
+        pan,
+        filterFrequency: 720,
+      });
+      this.playNoise({
+        duration: 0.074,
+        gain: 0.025 + power * 0.014,
+        when: now + 0.004,
+        attack: 0.001,
+        pan,
+        playbackRate: 1.28,
+        filterType: "bandpass",
+        filterFrequency: 1180,
+        endFilterFrequency: 330,
+        resonance: 1.6,
+      });
+      this.playNoise({
+        duration: 0.048,
+        gain: 0.014 + power * 0.009,
+        when: now + 0.057,
+        attack: 0.001,
+        pan: -pan * 0.5,
+        playbackRate: 1.52,
+        filterType: "bandpass",
+        filterFrequency: 1560,
+        endFilterFrequency: 460,
+        resonance: 1.25,
+      });
+      return;
+    }
+
+    const load = clamp(capturedCount / 8);
+    const charge = clamp(power / 1.15);
+    const bodyScale = tier === "loaded" ? 1 : 0.58;
+    const releaseValue = clamp(load * 0.72 + charge * 0.28);
+    this.duck(
+      clamp(0.56 - load * 0.25 - charge * 0.08, 0.22, 0.58),
+      0.44 + load * 0.28,
+    );
+
+    // Two related low bodies make loaded releases physically larger even on
+    // phone speakers; the limiter still bounds their combined transient.
     this.playTone({
-      frequency: 62 + power * 9,
-      endFrequency: 29,
-      duration: 0.7,
-      gain: 0.19 + power * 0.07 + mass * 0.035,
+      frequency: 59 - load * 11 + charge * 5,
+      endFrequency: 24,
+      duration: 0.62 + load * 0.24,
+      gain: (0.155 + charge * 0.055 + load * 0.105) * bodyScale,
       when: now,
       attack: 0.004,
       waveform: "sine",
       pan,
     });
+    this.playTone({
+      frequency: 94 + charge * 8 - load * 10,
+      endFrequency: 38,
+      duration: 0.48 + load * 0.18,
+      gain: (0.058 + charge * 0.025 + load * 0.07) * bodyScale,
+      when: now + 0.006,
+      attack: 0.006,
+      waveform: "triangle",
+      pan: -pan * 0.55,
+      filterFrequency: 920 + charge * 280,
+    });
     this.playNoise({
-      duration: 0.48,
-      gain: 0.13 + power * 0.09,
+      duration: 0.38 + load * 0.2,
+      gain: (0.085 + charge * 0.07 + load * 0.085) * bodyScale,
       when: now,
       attack: 0.002,
       pan,
-      playbackRate: 0.76,
+      playbackRate: 0.7 - load * 0.12,
       filterType: "lowpass",
-      filterFrequency: 4400 + power * 1600,
-      endFilterFrequency: 240,
+      filterFrequency: 2850 + charge * 1450 + load * 950,
+      endFilterFrequency: 220,
       resonance: 0.7,
     });
 
@@ -1046,52 +1149,117 @@ export class AudioEngine {
       this.playTone({
         frequency: midiToFrequency(root + interval),
         endFrequency: midiToFrequency(root + interval + 12),
-        duration: 0.54 + index * 0.08,
-        gain: 0.055 + mass * 0.018,
+        duration: 0.5 + load * 0.16 + index * 0.075,
+        gain: (0.032 + load * 0.032 + charge * 0.01) * (0.72 + bodyScale * 0.28),
         when: now + 0.025 + index * 0.012,
         attack: 0.045,
         waveform: index === 0 ? "triangle" : "sine",
         pan: (index - 1) * 0.34,
-        filterFrequency: 3200 + index * 1000,
+        filterFrequency: 2800 + index * 900 + load * 700,
       });
+    }
+
+    // A valuable captured configuration earns a delayed solar overtone. It is
+    // absent from one-object utility releases, so large setups resolve with a
+    // distinct reward rather than only more volume.
+    if (capturedCount >= 4 || releaseValue >= 0.66) {
+      this.playTone({
+        frequency: midiToFrequency(root + 19),
+        endFrequency: midiToFrequency(root + 31),
+        duration: 0.42 + releaseValue * 0.14,
+        gain: 0.034 + releaseValue * 0.038,
+        when: now + 0.115,
+        attack: 0.022,
+        waveform: "triangle",
+        pan: -pan,
+        filterFrequency: 5200,
+      });
+      if (capturedCount >= 7 && charge >= 0.62) {
+        this.playTone({
+          frequency: midiToFrequency(root + 26),
+          endFrequency: midiToFrequency(root + 38),
+          duration: 0.48,
+          gain: 0.035 + releaseValue * 0.025,
+          when: now + 0.155,
+          attack: 0.028,
+          waveform: "sine",
+          pan,
+          filterFrequency: 6100,
+        });
+      }
     }
   }
 
   private playFracture(chain: number, strength: number, x: number): void {
     const context = this.context;
     if (!context) return;
-    const now = context.currentTime + 0.003;
-    const force = clamp(strength, 0.15, 1.4);
-    const chainLift = clamp(chain / 14);
+    const eventTime = context.currentTime;
+    const now = eventTime + 0.003;
+    const force = clamp(Number.isFinite(strength) ? strength : 0.15, 0.15, 1.4);
+    const chainDepth = Number.isFinite(chain)
+      ? Math.max(1, Math.floor(chain))
+      : 1;
+    if (eventTime - this.lastFractureSoundTime > 0.14) {
+      this.fractureBurstPeak = 0;
+    }
+    const previousPeak = this.fractureBurstPeak;
+    const isNewPeak = chainDepth > previousPeak;
+    this.fractureBurstPeak = Math.max(previousPeak, chainDepth);
+    this.lastFractureSoundTime = eventTime;
+
+    const chainLift = clamp((chainDepth - 1) / 8);
+    const stagger = Math.min(0.11, (chainDepth - 1) * 0.014);
     const pan = this.panFor(x);
 
     this.playNoise({
-      duration: 0.18,
-      gain: 0.12 + force * 0.075,
-      when: now,
+      duration: 0.12 + force * 0.045,
+      gain: 0.082 + force * 0.055 + chainLift * 0.052,
+      when: now + stagger,
       attack: 0.001,
       pan,
       playbackRate: 1.15 + force * 0.35,
       filterType: "bandpass",
-      filterFrequency: 1700 + chainLift * 1700,
-      endFilterFrequency: 5400 + chainLift * 1600,
+      filterFrequency: 1550 + chainLift * 2100,
+      endFilterFrequency: 4700 + chainLift * 1900,
       resonance: 0.85,
     });
 
-    const shardRoot = midiToFrequency(72 + Math.min(12, chain));
-    const shardCount = Math.min(3, 1 + Math.floor(Math.max(0, chain) / 3));
-    for (let index = 0; index < shardCount; index += 1) {
+    // Many shards can break in a single fixed step. Pitch only the first hit
+    // and each newly reached depth, while noise carries the individual shards;
+    // this preserves a cascade without exhausting the bounded voice pool.
+    if (chainDepth === 1 || isNewPeak) {
+      const shardRoot = midiToFrequency(72 + Math.min(12, chainDepth));
       this.playTone({
-        frequency: shardRoot * [1, 1.19, 1.5][index],
-        endFrequency: shardRoot * [1.06, 1.11, 1.58][index],
-        duration: 0.105 + index * 0.035,
-        gain: 0.052 + chainLift * 0.024,
-        when: now + index * 0.026,
+        frequency: shardRoot,
+        endFrequency: shardRoot * (1.055 + chainLift * 0.035),
+        duration: 0.105 + chainLift * 0.075,
+        gain: 0.042 + chainLift * 0.035,
+        when: now + stagger,
         attack: 0.0015,
         waveform: "triangle",
-        pan: clamp(pan + (index - 1) * 0.24, -1, 1),
-        filterFrequency: 6200,
+        pan,
+        filterFrequency: 5700 + chainLift * 800,
       });
+    }
+
+    const milestone = chainDepth >= 8 ? 3 : chainDepth >= 5 ? 2 : chainDepth >= 3 ? 1 : 0;
+    const previousMilestone = previousPeak >= 8 ? 3 : previousPeak >= 5 ? 2 : previousPeak >= 3 ? 1 : 0;
+    if (isNewPeak && milestone > previousMilestone) {
+      const rewardRoot = PHASE_SCORES[this.phaseIndex].root + 12 + milestone * 2;
+      this.duck(0.76 - milestone * 0.08, 0.2 + milestone * 0.055);
+      for (const [index, interval] of [0, 7].entries()) {
+        this.playTone({
+          frequency: midiToFrequency(rewardRoot + interval),
+          endFrequency: midiToFrequency(rewardRoot + interval + 12),
+          duration: 0.25 + milestone * 0.055 + index * 0.04,
+          gain: 0.034 + milestone * 0.012,
+          when: now + stagger + 0.025 + index * 0.018,
+          attack: 0.012,
+          waveform: index === 0 ? "triangle" : "sine",
+          pan: clamp((index === 0 ? pan : -pan) * 0.7, -0.75, 0.75),
+          filterFrequency: 4500 + milestone * 500,
+        });
+      }
     }
   }
 

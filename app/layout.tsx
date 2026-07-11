@@ -25,7 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
       template: "%s — SOL//SHIFT",
     },
     description:
-      "Survive 60 seconds while the laws of physics mutate around you.",
+      "Pull matter into orbit, release a Nova, bank Flux, and survive six mutating laws in 60 seconds.",
     applicationName: "SOL//SHIFT",
     category: "game",
     icons: {
@@ -34,7 +34,7 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     openGraph: {
       title: "SOL//SHIFT",
-      description: "Survive 60 seconds while the laws of physics mutate around you.",
+      description: "Pull matter into orbit, release a Nova, bank Flux, and survive six mutating laws in 60 seconds.",
       type: "website",
       url: origin,
       images: [{ url: socialImage, width: 1_200, height: 630, alt: "SOL//SHIFT — Six laws. Sixty seconds." }],
@@ -42,7 +42,7 @@ export async function generateMetadata(): Promise<Metadata> {
     twitter: {
       card: "summary_large_image",
       title: "SOL//SHIFT",
-      description: "Survive 60 seconds while the laws of physics mutate around you.",
+      description: "Pull matter into orbit, release a Nova, bank Flux, and survive six mutating laws in 60 seconds.",
       images: [socialImage],
     },
   };

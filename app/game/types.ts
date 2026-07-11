@@ -132,11 +132,11 @@ export type GameEvent =
   | { type: "phase"; phase: PhaseName; phaseIndex: number }
   | { type: "charge-start" }
   | { type: "nova"; x: number; y: number; strength: number; captured: number }
-  | { type: "collect"; x: number; y: number; value: number; combo: number }
-  | { type: "gate"; x: number; y: number; value: number }
+  | { type: "collect"; x: number; y: number; value: number; awarded: number; combo: number }
+  | { type: "gate"; x: number; y: number; value: number; banked: number }
   | { type: "fracture"; x: number; y: number; chain: number; strength: number }
-  | { type: "near-miss"; x: number; y: number }
-  | { type: "hit"; x: number; y: number; stability: number }
+  | { type: "near-miss"; x: number; y: number; awarded: number }
+  | { type: "hit"; x: number; y: number; stability: number; lostFlux: number }
   | { type: "complete"; score: number }
   | { type: "game-over"; score: number; reason: string };
 

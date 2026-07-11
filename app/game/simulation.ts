@@ -314,6 +314,16 @@ export class GameSimulation {
     }
   }
 
+  /** Cancels a held field without emitting a Nova, used when focus is lost. */
+  cancelInput() {
+    this.inputActive = false;
+    this.core.charge = 0;
+    this.core.chargeSeconds = 0;
+    this.inputBuffer.active = false;
+    this.inputBuffer.justPressed = false;
+    this.inputBuffer.justReleased = false;
+  }
+
   forcePhase(index: number, phaseTick = 0) {
     const nextPhase = clamp(Math.floor(finite(index, 0)), 0, PHASES.length - 1);
     const nextPhaseTick = clamp(
@@ -1241,12 +1251,13 @@ export class GameSimulation {
       if (entity.kind === "energy" && distance <= this.core.radius + entity.radius + 3) {
         entity.life = entity.age;
         this.metrics.energyCollected += 1;
-        this.awardFlux(entity.value, true);
+        const awarded = this.awardFlux(entity.value, true);
         events.push({
           type: "collect",
           x: entity.x,
           y: entity.y,
           value: entity.value,
+          awarded,
           combo: this.metrics.combo,
         });
         continue;
@@ -1254,9 +1265,16 @@ export class GameSimulation {
 
       if (entity.kind === "gate" && distance <= this.core.radius + entity.radius) {
         entity.life = entity.age;
+        const bankedBefore = this.metrics.bankedScore;
         this.awardFlux(entity.value, true);
         this.bankFlux();
-        events.push({ type: "gate", x: entity.x, y: entity.y, value: entity.value });
+        events.push({
+          type: "gate",
+          x: entity.x,
+          y: entity.y,
+          value: entity.value,
+          banked: this.metrics.bankedScore - bankedBefore,
+        });
         continue;
       }
 
@@ -1281,13 +1299,14 @@ export class GameSimulation {
       ) {
         this.nearMissed.add(entity.id);
         this.metrics.nearMisses += 1;
-        this.awardFlux(6, true);
-        events.push({ type: "near-miss", x: entity.x, y: entity.y });
+        const awarded = this.awardFlux(6, true);
+        events.push({ type: "near-miss", x: entity.x, y: entity.y, awarded });
       }
     }
   }
 
   private hitCore(entity: Entity, events: GameEvent[]) {
+    const lostFlux = this.metrics.unbankedFlux;
     this.core.stability = Math.max(0, this.core.stability - 1);
     this.core.invulnerable = 1.05;
     this.core.hitFlash = 0.34;
@@ -1312,6 +1331,7 @@ export class GameSimulation {
       x: this.core.x,
       y: this.core.y,
       stability: this.core.stability,
+      lostFlux,
     });
 
     if (this.core.stability <= 0) {

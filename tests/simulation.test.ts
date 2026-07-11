@@ -139,6 +139,20 @@ test("render snapshots reuse live world storage while diagnostic snapshots stay 
   assert.notEqual(diagnostic.core, firstRender.core);
 });
 
+test("focus-loss cancellation clears charge without synthesizing a Nova", () => {
+  const simulation = makeSimulation(0x0ca1c311);
+  advance(simulation, 24, (tick) => input({
+    active: true,
+    justPressed: tick === 0,
+  }));
+  assert.ok(simulation.getSnapshot().core.charge > 0);
+
+  simulation.cancelInput();
+  const events = simulation.update(FIXED_STEP, input());
+  assert.equal(simulation.getSnapshot().core.charge, 0);
+  assert.equal(events.some((event) => event.type === "nova"), false);
+});
+
 test("Creator autopilot survives an authentic Daily run across recording viewports", () => {
   const showcaseSeed = 0x50_1a_7e_56;
   const viewports = [

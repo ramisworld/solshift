@@ -34,9 +34,12 @@ test("server-renders the complete anonymous game entry", async () => {
   assert.match(html, /<title>SOL\/\/SHIFT — Survive the laws of physics<\/title>/i);
   assert.match(html, /PHYSICS SURVIVAL/);
   assert.match(html, /DAILY SHIFT/);
-  assert.match(html, /ENTER THE FIELD/);
+  assert.match(html, /START 60s SHIFT/);
   assert.match(html, /ENDLESS SHIFT/);
-  assert.match(html, /Survive while the laws of physics mutate around you/);
+  assert.match(html, /Capture mass\. Detonate Novas\. Bank Flux\./);
+  assert.match(html, /01 · PULL/);
+  assert.match(html, /02 · NOVA/);
+  assert.match(html, /03 · BANK/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 

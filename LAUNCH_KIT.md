@@ -2,7 +2,7 @@
 
 ## One-sentence hook
 
-**Survive 60 seconds while the laws of physics mutate around you.**
+**Control a tiny sun: pull matter, release Novas, bank Flux, and survive six mutating laws in 60 seconds.**
 
 Alternative launch framing: **A tiny artificial sun. Six laws of physics. One minute to survive.**
 
@@ -14,12 +14,13 @@ SOL//SHIFT is a touch-first physics survival game built for the browser. Steer a
 
 - Move with pointer, touch, WASD, or arrow keys.
 - Hold primary input or Space to attract matter and build visible tension.
-- Release to fire Nova, break vulnerable hazards, bank Flux, and recoil.
+- Release to fire Nova, break vulnerable hazards, create chains, earn at-risk Flux, and recoil.
+- Cross a luminous ring to bank Flux before a hit can erase it.
 - `P`/`Escape` pauses; `M` toggles sound.
 
 ## Recommended public URL structure
 
-- Canonical game: use the deployed HTTPS production origin with `/` as the only path.
+- Canonical game: connect a standalone SolShift domain, then use that one origin everywhere. Do not publish the account-scoped Sites URL in launch posts.
 - Daily challenge: append `?v=1&mode=daily&seed=…&target=…&archetype=…` to that origin.
 - Endless challenge: use the same validated format with `mode=endless`.
 - Creator Mode should be entered from the clearly separated menu control; public challenge URLs never enable or inherit Creator state.
@@ -76,6 +77,19 @@ The white-hot Core at the centre of a just-released Nova, with three large cyan 
 
 ## X launch-post options
 
+### Recommended for a 40-follower account
+
+Pair this with the 15-second clip and replace the placeholder with the branded game URL. Keep the link in the post, reply quickly to every real response, and do not dilute the hook with hashtags.
+
+> I made a browser game where physics changes every 10 seconds.
+>
+> Pull matter. Release a Nova. Bank your Flux. Survive 60 seconds.
+>
+> No login. Works on phone.
+>
+> Can you beat my Daily Shift?
+> [SOLSHIFT URL]
+
 ### Option 1 — visible result first
 
 > A tiny artificial sun. Six laws of physics. 60 seconds to survive.
@@ -107,7 +121,7 @@ The white-hot Core at the centre of a just-released Nova, with three large cyan 
 >
 > React handles the product shell—not the frame loop. Adaptive quality changes only cosmetics, so seeded hazards never change with visual quality. Tests step full 3,600-tick runs without waiting a minute.
 >
-> Build notes + source: [repository link]
+> Build notes + source: https://github.com/ramisworld/solshift
 
 ## Game-first post
 
@@ -119,6 +133,25 @@ The white-hot Core at the centre of a just-released Nova, with three large cyan 
 >
 > [video]
 
+## Recommended LinkedIn post
+
+Pair this with the same native 15-second clip and replace the placeholder with the branded game URL.
+
+> I just shipped SOL//SHIFT—a browser game where the laws of physics mutate every 10 seconds.
+>
+> You control a tiny artificial sun:
+> → hold to pull cyan matter into orbit
+> → release it as a Nova
+> → cross a ring to bank your Flux before a hit wipes it
+>
+> The first version looked impressive, but the goal was too easy to miss. So I rebuilt the first-run experience around one visible loop—PULL → NOVA → BANK—and added exact score feedback, clearer danger language, phase-specific coaching, and a faster retry target.
+>
+> It now runs as a deterministic 60 Hz simulation with six physics laws, procedural audio, desktop/mobile controls, Daily challenges, shareable results, and 48 automated checks.
+>
+> Try today’s Daily Shift: [SOLSHIFT URL]
+>
+> I’d love to know your score—and which law ended your run.
+
 ## Suggested playable-link reply
 
 > Play today’s Daily Shift here: [canonical link]
@@ -129,7 +162,7 @@ The white-hot Core at the centre of a just-released Nova, with three large cyan 
 
 > This was not “one prompt, zero iteration.” One ambitious instruction started the build, then the model ran a seven-lens concept tournament, built an Orbit/Fracture slice, opened it in the browser, found runtime bugs the compiler missed, expanded the remaining laws, stress-tested deterministic runs, and performed visual/mobile/performance correction passes.
 >
-> Honest provenance and the conservative benchmark are in the repo: [link]
+> Honest provenance and the conservative benchmark are in the repo: https://github.com/ramisworld/solshift
 
 ## Why this is a serious model benchmark
 

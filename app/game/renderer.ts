@@ -4,6 +4,7 @@ import type {
   GameSnapshot,
   RenderQuality,
 } from "./types";
+import { getNovaFeedbackTier } from "./gameFeel";
 
 const TAU = Math.PI * 2;
 const MAX_PARTICLES = 512;
@@ -41,6 +42,12 @@ const PARTICLE_COLORS = [
   "#ff8376",
   "#f8d45c",
 ] as const;
+
+const COLLECTIBLE_CYAN = "#8fe9ff";
+const COLLECTIBLE_WHITE = "#f4feff";
+const DANGER_CORAL = "#ff746b";
+const CAPTURE_AMBER = "#ffc35c";
+const CAPTURE_WHITE = "#fff1c2";
 
 const VERTEX_SHADER = `
 attribute vec2 a_position;
@@ -210,6 +217,15 @@ function phaseIndex(index: number): number {
   return ((safe % PHASE_ACCENTS.length) + PHASE_ACCENTS.length) % PHASE_ACCENTS.length;
 }
 
+function isCapturableMatter(entity: Entity): boolean {
+  return entity.vulnerable && (
+    entity.kind === "orbiter" ||
+    entity.kind === "fragment" ||
+    entity.kind === "droplet" ||
+    entity.kind === "swarm"
+  );
+}
+
 function qualityShaderLevel(level: RenderQuality["level"]): number {
   if (level === "high") return 1;
   if (level === "medium") return 0.62;
@@ -254,6 +270,9 @@ export class GameRenderer {
   private lastCoreY = 0;
   private eventShake = 0;
   private transitionKick = 0;
+  private currentPhaseIndex = 0;
+  private lastNovaLoad = 0;
+  private lastNovaCaptured = 0;
   private frameIntervalEma = 16.7;
   private frameSamples = 0;
 
@@ -369,6 +388,7 @@ export class GameRenderer {
       switch (event.type) {
         case "phase": {
           const color = phaseIndex(event.phaseIndex) + 1;
+          this.currentPhaseIndex = phaseIndex(event.phaseIndex);
           this.transitionKick = 1;
           this.spawnPulse(
             this.width * 0.5,
@@ -405,28 +425,95 @@ export class GameRenderer {
           );
           break;
         case "nova": {
-          const amount = 16 + Math.round(clamp(event.strength, 0, 1) * 30);
+          const chargeLoad = clamp((event.strength - 0.08) / 1.12, 0, 1);
+          const capturedLoad = clamp(event.captured / 6, 0, 1);
+          const tier = getNovaFeedbackTier(event.strength, event.captured);
+          const empty = tier === "empty";
+          const charged = tier === "charged";
+          const load = tier === "loaded"
+            ? clamp(0.45 + capturedLoad * 0.35 + chargeLoad * 0.2, 0, 1)
+            : charged
+              ? clamp(0.24 + chargeLoad * 0.32, 0, 0.56)
+              : chargeLoad * 0.2;
+          this.lastNovaLoad = load;
+          this.lastNovaCaptured = Math.max(0, event.captured);
+
+          if (empty) {
+            // A tap with no stored mass is useful feedback, not a false climax.
+            this.spawnPulse(
+              event.x,
+              event.y,
+              10,
+              155 + chargeLoad * 80,
+              0.34,
+              0,
+              0,
+              0.34,
+            );
+            this.spawnBurst(event.x, event.y, 4, 38, 92, 0, 0, 0.26);
+            this.eventShake = Math.min(1.15, this.eventShake + 0.12 + chargeLoad * 0.2);
+            break;
+          }
+
+          if (charged) {
+            // Charge alone creates a useful medium wave. Captured mass is what
+            // unlocks the amber, screen-dominating release below.
+            this.spawnPulse(
+              event.x,
+              event.y,
+              11,
+              220 + load * 180,
+              0.42 + load * 0.16,
+              2,
+              1,
+              0.38 + load * 0.3,
+            );
+            this.spawnBurst(
+              event.x,
+              event.y,
+              5 + Math.round(load * 6),
+              58,
+              150 + load * 130,
+              2,
+              0,
+              0.34 + load * 0.14,
+            );
+            this.eventShake = Math.min(1.55, this.eventShake + 0.25 + load * 0.55);
+            break;
+          }
+
+          const pulsePower = clamp(0.42 + load * 0.68, 0, 1.1);
           this.spawnPulse(
             event.x,
             event.y,
-            18,
-            520 + event.strength * 300,
-            0.8,
+            14 + capturedLoad * 4,
+            310 + load * 285,
+            0.5 + load * 0.26,
             1,
+            3,
+            pulsePower,
+          );
+          this.spawnPulse(
+            event.x,
+            event.y,
+            10,
+            235 + capturedLoad * 175,
+            0.58 + capturedLoad * 0.22,
             0,
-            1 + event.strength,
+            2,
+            0.36 + capturedLoad * 0.5,
           );
           this.spawnBurst(
             event.x,
             event.y,
-            amount,
-            120,
-            360 + event.strength * 180,
-            1,
+            7 + Math.round(load * 13),
+            82,
+            245 + load * 205,
+            event.captured > 0 ? 1 : 0,
             2,
-            0.68,
+            0.46 + load * 0.2,
           );
-          this.eventShake = Math.min(6.5, this.eventShake + 1.8 + event.strength * 3.4);
+          this.eventShake = Math.min(3.1, this.eventShake + 0.38 + load * 1.35);
           break;
         }
         case "collect":
@@ -448,28 +535,42 @@ export class GameRenderer {
           this.eventShake = Math.min(4, this.eventShake + 0.8);
           break;
         case "fracture": {
-          const count = 12 + Math.min(28, event.chain * 3);
+          const chainPower = clamp((event.chain - 1) / 6, 0, 1);
+          const impactColor = this.currentPhaseIndex === 4 ? 6 : 3;
+          const count = 9 + Math.min(18, event.chain * 2);
           this.spawnBurst(
             event.x,
             event.y,
             count,
             70,
             290 + event.strength * 170,
-            3,
+            impactColor,
             1,
-            0.95,
+            0.72 + chainPower * 0.24,
           );
           this.spawnPulse(
             event.x,
             event.y,
             8,
-            285,
-            0.52,
-            3,
+            245 + chainPower * 115,
+            0.46 + chainPower * 0.13,
+            impactColor,
             1,
-            0.8 + event.strength,
+            0.62 + event.strength * 0.48 + chainPower * 0.42,
           );
-          this.eventShake = Math.min(6, this.eventShake + 1.2 + event.chain * 0.18);
+          if (event.chain >= 3) {
+            this.spawnPulse(
+              event.x,
+              event.y,
+              5,
+              190 + chainPower * 150,
+              0.4 + chainPower * 0.16,
+              0,
+              0,
+              0.24 + chainPower * 0.36,
+            );
+          }
+          this.eventShake = Math.min(3.8, this.eventShake + 0.22 + chainPower * 0.52);
           break;
         }
         case "near-miss":
@@ -532,6 +633,7 @@ export class GameRenderer {
 
   render(snapshot: GameSnapshot, alpha = 0): void {
     if (this.disposed) return;
+    this.currentPhaseIndex = phaseIndex(snapshot.phaseIndex);
     if (
       Math.abs(snapshot.width - this.width) > 0.5 ||
       Math.abs(snapshot.height - this.height) > 0.5
@@ -648,6 +750,11 @@ export class GameRenderer {
 
   private bloomEnabled(): boolean {
     return this.quality.bloom && this.adaptiveTier === 0;
+  }
+
+  private novaVisualPower(strength: number): number {
+    const chargePower = clamp((strength - 0.08) / 1.12, 0, 1);
+    return clamp(Math.max(chargePower * 0.68, this.lastNovaLoad), 0.035, 1);
   }
 
   private trailPointBudget(): number {
@@ -1016,7 +1123,12 @@ export class GameRenderer {
       gl.uniform3f(resources.accent, accent[0], accent[1], accent[2]);
       gl.uniform1f(resources.time, this.visualTime);
       gl.uniform1f(resources.charge, clamp(snapshot.core.charge, 0, 1));
-      gl.uniform1f(resources.nova, clamp(snapshot.core.novaStrength, 0, 1.5));
+      gl.uniform1f(
+        resources.nova,
+        snapshot.core.novaStrength > 0
+          ? this.novaVisualPower(snapshot.core.novaStrength)
+          : 0,
+      );
       gl.uniform1f(resources.novaAge, clamp(snapshot.core.novaAge, 0, 2));
       gl.uniform1f(resources.phase, colorIndex);
       gl.uniform1f(
@@ -1270,11 +1382,49 @@ export class GameRenderer {
     interpolation: number,
   ): void {
     const charge = clamp(snapshot.core.charge, 0, 1);
-    const accent = PHASE_ACCENTS[phaseIndex(snapshot.phaseIndex)];
+    let capturedCount = 0;
+    let distanceTotal = 0;
+    for (let index = 0; index < snapshot.entities.length; index += 1) {
+      const entity = snapshot.entities[index];
+      if (!entity.captured) continue;
+      const x = entity.x + entity.vx * interpolation / 60;
+      const y = entity.y + entity.vy * interpolation / 60;
+      capturedCount += 1;
+      distanceTotal += Math.hypot(x - coreX, y - coreY);
+    }
+    if (capturedCount === 0) return;
+
+    const density = clamp(capturedCount / 7, 0, 1);
+    const shortSide = Math.min(this.width, this.height);
+    const orbitRadius = clamp(
+      distanceTotal / capturedCount,
+      snapshot.core.radius * 1.85,
+      shortSide * 0.38,
+    );
     ctx.save();
-    ctx.strokeStyle = accent;
+    ctx.strokeStyle = CAPTURE_AMBER;
     ctx.setLineDash(CAPTURE_DASH);
-    ctx.lineWidth = 0.8 + charge * 0.9;
+    ctx.lineDashOffset = -this.visualTime * (10 + charge * 18);
+    ctx.lineWidth = 0.9 + charge * 1.05 + density * 0.35;
+    ctx.globalAlpha = 0.2 + charge * 0.28 + density * 0.08;
+    if (this.bloomEnabled()) {
+      ctx.shadowColor = CAPTURE_AMBER;
+      ctx.shadowBlur = 5 + charge * 5;
+    }
+    ctx.beginPath();
+    ctx.ellipse(
+      coreX,
+      coreY,
+      orbitRadius,
+      orbitRadius * 0.8,
+      this.visualTime * 0.08,
+      0.18,
+      5.86,
+    );
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.setLineDash(EMPTY_DASH);
+    ctx.lineWidth = 0.85 + charge * 0.65;
     for (let index = 0; index < snapshot.entities.length; index += 1) {
       const entity = snapshot.entities[index];
       if (!entity.captured) continue;
@@ -1282,35 +1432,18 @@ export class GameRenderer {
       const y = entity.y + entity.vy * interpolation / 60;
       const dx = x - coreX;
       const dy = y - coreY;
-      const distance = Math.hypot(dx, dy);
-      const orbitRadius = Math.max(
-        snapshot.core.radius * 1.6,
-        entity.captureRadius || distance,
-      );
-      ctx.globalAlpha = 0.16 + charge * 0.28;
+      ctx.globalAlpha =
+        (0.22 + charge * 0.4) /
+        Math.max(1, Math.sqrt(capturedCount) * 0.72);
       ctx.beginPath();
-      ctx.ellipse(
-        coreX,
-        coreY,
-        orbitRadius,
-        orbitRadius * 0.82,
-        entity.captureAngle * 0.15,
-        entity.captureAngle - 1.15,
-        entity.captureAngle + 2.5,
-      );
-      ctx.stroke();
-      ctx.setLineDash(EMPTY_DASH);
-      ctx.globalAlpha = 0.12 + charge * 0.38;
-      ctx.beginPath();
-      ctx.moveTo(coreX + dx * 0.2, coreY + dy * 0.2);
+      ctx.moveTo(coreX + dx * 0.28, coreY + dy * 0.28);
       ctx.quadraticCurveTo(
-        coreX + dx * 0.54 - dy * 0.08,
-        coreY + dy * 0.54 + dx * 0.08,
+        coreX + dx * 0.58 - dy * (0.05 + charge * 0.04),
+        coreY + dy * 0.58 + dx * (0.05 + charge * 0.04),
         x,
         y,
       );
       ctx.stroke();
-      ctx.setLineDash(CAPTURE_DASH);
     }
     ctx.restore();
   }
@@ -1340,13 +1473,20 @@ export class GameRenderer {
       ctx.translate(x, y);
       ctx.rotate(entity.rotation);
       ctx.globalAlpha = alpha;
-      if (this.bloomEnabled() && (entity.kind === "energy" || entity.kind === "gate")) {
-        ctx.shadowColor = accent;
+      if (
+        this.bloomEnabled() &&
+        (entity.kind === "energy" || entity.kind === "gate" || entity.captured)
+      ) {
+        ctx.shadowColor = entity.captured
+          ? CAPTURE_AMBER
+          : entity.kind === "energy"
+            ? COLLECTIBLE_CYAN
+            : accent;
         ctx.shadowBlur = 8;
       }
       switch (entity.kind) {
         case "energy":
-          this.drawEnergy(ctx, entity, accent);
+          this.drawEnergy(ctx, entity);
           break;
         case "orbiter":
           this.drawOrbiter(ctx, entity, accent);
@@ -1374,8 +1514,19 @@ export class GameRenderer {
           break;
       }
       ctx.shadowBlur = 0;
-      if (entity.dangerous) this.drawThreatSilhouette(ctx, entity.radius);
-      if (entity.vulnerable) this.drawVulnerableNotch(ctx, entity.radius, accent);
+      // Material shading may attenuate alpha internally; state grammar must stay
+      // equally legible across every entity kind.
+      ctx.globalAlpha = alpha;
+      if (entity.captured) {
+        this.drawCapturedState(ctx, entity);
+      } else if (entity.dangerous) {
+        this.drawThreatSilhouette(ctx, entity);
+      } else if (entity.kind === "energy" || isCapturableMatter(entity)) {
+        this.drawCollectibleState(ctx, entity);
+      }
+      if (entity.vulnerable && !entity.dangerous && !entity.captured) {
+        this.drawVulnerableNotch(ctx, entity.radius);
+      }
       ctx.restore();
     }
   }
@@ -1383,16 +1534,15 @@ export class GameRenderer {
   private drawEnergy(
     ctx: CanvasRenderingContext2D,
     entity: Entity,
-    accent: string,
   ): void {
     const radius = Math.max(3, entity.radius);
-    ctx.fillStyle = accent;
+    ctx.fillStyle = COLLECTIBLE_CYAN;
     ctx.globalAlpha *= 0.34;
     ctx.beginPath();
     ctx.arc(0, 0, radius * 1.85, 0, TAU);
     ctx.fill();
     ctx.globalAlpha *= 2.5;
-    ctx.fillStyle = "#fff9df";
+    ctx.fillStyle = COLLECTIBLE_WHITE;
     ctx.beginPath();
     ctx.moveTo(0, -radius);
     ctx.lineTo(radius * 0.72, 0);
@@ -1400,7 +1550,7 @@ export class GameRenderer {
     ctx.lineTo(-radius * 0.72, 0);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = accent;
+    ctx.strokeStyle = COLLECTIBLE_CYAN;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(0, 0, radius * 1.38, this.visualTime, this.visualTime + 3.8);
@@ -1413,9 +1563,19 @@ export class GameRenderer {
     accent: string,
   ): void {
     const radius = Math.max(5, entity.radius);
-    ctx.fillStyle = entity.dangerous ? "#20191d" : "#162638";
-    ctx.strokeStyle = entity.captured ? "#ffe0a2" : accent;
-    ctx.lineWidth = entity.captured ? 1.6 : 1;
+    ctx.fillStyle = entity.captured
+      ? "#342510"
+      : entity.dangerous
+        ? "#2b171a"
+        : "#12283a";
+    ctx.strokeStyle = entity.captured
+      ? CAPTURE_AMBER
+      : entity.dangerous
+        ? DANGER_CORAL
+        : entity.vulnerable
+          ? COLLECTIBLE_CYAN
+          : accent;
+    ctx.lineWidth = entity.captured ? 1.8 : entity.dangerous ? 1.35 : 1;
     ctx.beginPath();
     ctx.arc(0, 0, radius, 0, TAU);
     ctx.fill();
@@ -1467,9 +1627,17 @@ export class GameRenderer {
   ): void {
     const radius = Math.max(fragment ? 3 : 8, entity.radius);
     const points = fragment ? 4 : 6;
-    ctx.fillStyle = fragment ? "#294350" : "#163746";
-    ctx.strokeStyle = fragment ? "#b8f5ff" : "#8aeaff";
-    ctx.lineWidth = fragment ? 1 : 1.35;
+    ctx.fillStyle = entity.captured
+      ? "#35260f"
+      : fragment
+        ? "#294350"
+        : "#163746";
+    ctx.strokeStyle = entity.captured
+      ? CAPTURE_AMBER
+      : fragment
+        ? "#b8f5ff"
+        : "#8aeaff";
+    ctx.lineWidth = entity.captured ? 1.55 : fragment ? 1 : 1.35;
     ctx.beginPath();
     for (let point = 0; point < points; point += 1) {
       const angle = (point / points) * TAU - Math.PI * 0.5;
@@ -1484,7 +1652,7 @@ export class GameRenderer {
     ctx.fill();
     ctx.stroke();
     ctx.globalAlpha *= 0.44;
-    ctx.fillStyle = "#e6fcff";
+    ctx.fillStyle = entity.captured ? CAPTURE_WHITE : "#e6fcff";
     ctx.beginPath();
     ctx.moveTo(-radius * 0.12, -radius * 0.78);
     ctx.lineTo(radius * 0.48, radius * 0.1);
@@ -1509,9 +1677,19 @@ export class GameRenderer {
     accent: string,
   ): void {
     const radius = Math.max(5, entity.radius);
-    ctx.fillStyle = "#172842";
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 1.1;
+    ctx.fillStyle = entity.captured
+      ? "#342711"
+      : entity.dangerous
+        ? "#291921"
+        : "#142b43";
+    ctx.strokeStyle = entity.captured
+      ? CAPTURE_AMBER
+      : entity.dangerous
+        ? DANGER_CORAL
+        : entity.vulnerable
+          ? COLLECTIBLE_CYAN
+          : accent;
+    ctx.lineWidth = entity.captured ? 1.65 : 1.1;
     ctx.beginPath();
     ctx.moveTo(radius * 1.25, 0);
     ctx.bezierCurveTo(radius * 0.34, -radius, -radius * 0.9, -radius * 0.72, -radius, 0);
@@ -1575,9 +1753,19 @@ export class GameRenderer {
     const radius = Math.max(4, entity.radius);
     const velocityAngle = Math.atan2(entity.vy, entity.vx) - entity.rotation;
     ctx.rotate(velocityAngle);
-    ctx.fillStyle = entity.dangerous ? "#f4c84d" : "#b89b45";
-    ctx.strokeStyle = "#fff0a6";
-    ctx.lineWidth = 0.8;
+    ctx.fillStyle = entity.captured
+      ? "#3b2a0c"
+      : entity.vulnerable && !entity.dangerous
+        ? "#1a5363"
+        : entity.dangerous
+          ? "#e6af3d"
+          : "#9c863e";
+    ctx.strokeStyle = entity.captured
+      ? CAPTURE_AMBER
+      : entity.vulnerable && !entity.dangerous
+        ? COLLECTIBLE_WHITE
+        : "#fff0a6";
+    ctx.lineWidth = entity.captured ? 1.25 : 0.8;
     ctx.beginPath();
     ctx.moveTo(radius * 1.4, 0);
     ctx.lineTo(-radius * 0.75, -radius * 0.68);
@@ -1592,11 +1780,59 @@ export class GameRenderer {
     ctx.fill();
   }
 
-  private drawThreatSilhouette(ctx: CanvasRenderingContext2D, radius: number): void {
-    const r = Math.max(6, radius * 1.24);
-    ctx.strokeStyle = "#ff685f";
-    ctx.lineWidth = 1.05;
-    ctx.globalAlpha *= 0.7;
+  private drawCapturedState(ctx: CanvasRenderingContext2D, entity: Entity): void {
+    const radius = Math.max(6, entity.radius);
+    const pulse = this.quality.reducedMotion
+      ? 0.5
+      : 0.5 + Math.sin(this.visualTime * 4.2 + entity.seed * 0.001) * 0.5;
+    const r = radius * (1.32 + pulse * 0.06);
+    ctx.save();
+    ctx.strokeStyle = CAPTURE_AMBER;
+    ctx.fillStyle = CAPTURE_WHITE;
+    ctx.lineWidth = 1.3;
+    ctx.globalAlpha *= 0.68 + pulse * 0.16;
+    if (this.bloomEnabled()) {
+      ctx.shadowColor = CAPTURE_AMBER;
+      ctx.shadowBlur = 7;
+    }
+    ctx.beginPath();
+    ctx.arc(0, 0, r, -0.95, 0.82);
+    ctx.moveTo(-r * 0.58, r * 0.82);
+    ctx.arc(0, 0, r, 2.2, 4.02);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(r * 0.72, -r * 0.63, 1.15 + pulse * 0.45, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private drawCollectibleState(ctx: CanvasRenderingContext2D, entity: Entity): void {
+    const radius = Math.max(6, entity.radius);
+    const pulse = this.quality.reducedMotion
+      ? 0.5
+      : 0.5 + Math.sin(this.visualTime * 3 + entity.seed * 0.0007) * 0.5;
+    const r = radius * (1.28 + pulse * 0.05);
+    ctx.save();
+    ctx.strokeStyle = COLLECTIBLE_CYAN;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha *= entity.kind === "energy" ? 0.68 : 0.42 + pulse * 0.14;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, -0.72, 0.15);
+    ctx.moveTo(-r * 0.75, r * 0.3);
+    ctx.arc(0, 0, r, 2.34, 3.15);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawThreatSilhouette(ctx: CanvasRenderingContext2D, entity: Entity): void {
+    const pulse = this.quality.reducedMotion
+      ? 0.5
+      : 0.5 + Math.sin(this.visualTime * 5.4 + entity.seed * 0.0009) * 0.5;
+    const r = Math.max(6, entity.radius * (1.23 + pulse * 0.12));
+    ctx.strokeStyle = DANGER_CORAL;
+    ctx.lineWidth = 1.05 + pulse * 0.35;
+    ctx.globalAlpha *= 0.54 + pulse * 0.26;
     ctx.beginPath();
     ctx.arc(0, 0, r, -0.72, 0.72);
     ctx.moveTo(-r * 0.75, -r * 0.42);
@@ -1607,10 +1843,9 @@ export class GameRenderer {
   private drawVulnerableNotch(
     ctx: CanvasRenderingContext2D,
     radius: number,
-    accent: string,
   ): void {
     const r = Math.max(7, radius * 1.05);
-    ctx.strokeStyle = accent;
+    ctx.strokeStyle = COLLECTIBLE_WHITE;
     ctx.lineWidth = 2;
     ctx.globalAlpha *= 0.8;
     ctx.beginPath();
@@ -1630,7 +1865,11 @@ export class GameRenderer {
       const alpha = (1 - progress) * (1 - progress) * pulse.strength;
       ctx.globalAlpha = clamp(alpha, 0, 0.9);
       ctx.strokeStyle = PARTICLE_COLORS[pulse.color];
-      ctx.lineWidth = pulse.kind === 1 ? 2.4 : 1.5 + (1 - progress) * 1.8;
+      ctx.lineWidth = pulse.kind === 1
+        ? 2.4
+        : pulse.kind === 3
+          ? 1.8 + (1 - progress) * 2.5
+          : 1.5 + (1 - progress) * 1.8;
       if (this.bloomEnabled() && pulse.kind !== 1) {
         ctx.shadowColor = PARTICLE_COLORS[pulse.color];
         ctx.shadowBlur = 10;
@@ -1656,6 +1895,12 @@ export class GameRenderer {
           0,
           TAU,
         );
+      } else if (pulse.kind === 3) {
+        // Loaded Nova: one coherent front plus a tighter trailing ring. The
+        // paired geometry reads as stored mass releasing, without more sprites.
+        ctx.arc(pulse.x, pulse.y, pulse.radius, 0, TAU);
+        ctx.moveTo(pulse.x + pulse.radius * 0.72, pulse.y);
+        ctx.arc(pulse.x, pulse.y, pulse.radius * 0.72, 0, TAU);
       } else {
         ctx.arc(pulse.x, pulse.y, pulse.radius, 0, TAU);
       }
@@ -1718,20 +1963,35 @@ export class GameRenderer {
     const core = snapshot.core;
     const radius = Math.max(9, core.radius);
     const charge = clamp(core.charge, 0, 1);
+    let capturedCount = 0;
+    for (let index = 0; index < snapshot.entities.length; index += 1) {
+      if (snapshot.entities[index].captured) capturedCount += 1;
+    }
+    const massLoad = clamp(capturedCount / 6, 0, 1);
     const hit = clamp(core.hitFlash, 0, 1);
-    const blink = core.invulnerable > 0 && Math.sin(this.visualTime * 32) < -0.35 ? 0.48 : 1;
+    const blink =
+      core.invulnerable > 0 && Math.sin(this.visualTime * 32) < -0.35
+        ? 0.48
+        : 1;
     ctx.save();
     ctx.translate(x, y);
     ctx.globalAlpha = blink;
 
-    if (charge > 0.01) {
-      const halo = ctx.createRadialGradient(0, 0, radius, 0, 0, radius * (3.2 + charge * 2.8));
-      halo.addColorStop(0, `rgba(255, 177, 63, ${0.16 + charge * 0.11})`);
-      halo.addColorStop(0.36, `rgba(255, 133, 40, ${charge * 0.055})`);
+    if (charge > 0.01 || capturedCount > 0) {
+      const haloReach = radius * (3.2 + charge * 2.8 + massLoad * 0.65);
+      const halo = ctx.createRadialGradient(0, 0, radius, 0, 0, haloReach);
+      halo.addColorStop(
+        0,
+        `rgba(255, 177, 63, ${0.14 + charge * 0.11 + massLoad * 0.04})`,
+      );
+      halo.addColorStop(
+        0.36,
+        `rgba(255, 133, 40, ${charge * 0.055 + massLoad * 0.025})`,
+      );
       halo.addColorStop(1, "rgba(255, 110, 20, 0)");
       ctx.fillStyle = halo;
       ctx.beginPath();
-      ctx.arc(0, 0, radius * (3.2 + charge * 2.8), 0, TAU);
+      ctx.arc(0, 0, haloReach, 0, TAU);
       ctx.fill();
     }
 
@@ -1799,6 +2059,28 @@ export class GameRenderer {
     ctx.ellipse(0, 0, radius * 1.12, radius * 1.62, 0.68, 3.75, 5.7);
     ctx.stroke();
 
+    if (capturedCount > 0) {
+      const segments = Math.min(8, capturedCount);
+      const segmentRadius = radius * (2.02 + charge * 0.16);
+      const gap = 0.13;
+      ctx.save();
+      ctx.strokeStyle = CAPTURE_AMBER;
+      ctx.lineWidth = 1.7 + massLoad * 0.7;
+      ctx.globalAlpha = blink * (0.55 + charge * 0.28);
+      if (this.bloomEnabled()) {
+        ctx.shadowColor = CAPTURE_AMBER;
+        ctx.shadowBlur = 7;
+      }
+      for (let segment = 0; segment < segments; segment += 1) {
+        const start = -Math.PI * 0.5 + (segment / segments) * TAU + gap;
+        const end = -Math.PI * 0.5 + ((segment + 1) / segments) * TAU - gap;
+        ctx.beginPath();
+        ctx.arc(0, 0, segmentRadius, start, end);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     if (charge > 0.04) {
       ctx.strokeStyle = "#ffd078";
       ctx.lineWidth = 1;
@@ -1842,19 +2124,57 @@ export class GameRenderer {
     }
     ctx.restore();
 
-    if (core.novaAge > 0 && core.novaAge < 1.35 && core.novaStrength > 0) {
-      const progress = clamp(core.novaAge / 1.35, 0, 1);
+    if (core.novaAge > 0 && core.novaStrength > 0) {
+      const visualPower = this.novaVisualPower(core.novaStrength);
+      const tier = getNovaFeedbackTier(core.novaStrength, this.lastNovaCaptured);
+      const loaded = tier === "loaded";
+      const charged = tier === "charged";
+      const duration = loaded
+        ? 0.68 + visualPower * 0.34
+        : charged
+          ? 0.5 + visualPower * 0.22
+          : 0.38 + visualPower * 0.14;
+      const progress = clamp(core.novaAge / duration, 0, 1);
+      if (progress >= 1) return;
+      const shortSide = Math.min(this.width, this.height);
+      const travel = loaded
+        ? shortSide * (0.28 + visualPower * 0.3)
+        : charged
+          ? shortSide * (0.15 + visualPower * 0.15)
+          : shortSide * (0.085 + visualPower * 0.08);
       ctx.save();
-      ctx.strokeStyle = "#ffd27a";
-      ctx.lineWidth = 1.4 + (1 - progress) * 3.2;
-      ctx.globalAlpha = (1 - progress) * 0.72;
-      if (this.bloomEnabled()) {
-        ctx.shadowColor = "#ff9a32";
-        ctx.shadowBlur = 12;
+      ctx.strokeStyle = loaded
+        ? CAPTURE_AMBER
+        : charged
+          ? COLLECTIBLE_CYAN
+          : CAPTURE_WHITE;
+      ctx.lineWidth = loaded
+        ? 1.5 + (1 - progress) * (2.2 + visualPower * 2.1)
+        : charged
+          ? 1.2 + (1 - progress) * (1.4 + visualPower * 0.7)
+          : 1 + (1 - progress) * 1.1;
+      ctx.globalAlpha = (1 - progress) * (
+        loaded
+          ? 0.34 + visualPower * 0.4
+          : charged
+            ? 0.25 + visualPower * 0.24
+            : 0.18 + visualPower * 0.14
+      );
+      if (this.bloomEnabled() && loaded) {
+        ctx.shadowColor = CAPTURE_AMBER;
+        ctx.shadowBlur = 7 + visualPower * 7;
       }
       ctx.beginPath();
-      ctx.arc(x, y, radius * 1.2 + progress * Math.min(this.width, this.height) * 0.62, 0, TAU);
+      ctx.arc(x, y, radius * 1.2 + progress * travel, 0, TAU);
       ctx.stroke();
+      if (loaded && visualPower > 0.42) {
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha *= 0.42;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(x, y, radius * 1.2 + progress * travel * 0.76, 0, TAU);
+        ctx.stroke();
+      }
       ctx.restore();
     }
   }

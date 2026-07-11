@@ -73,7 +73,7 @@ If the loop still feels like “move a circle and press a bomb” after two seri
 
 ## Product language
 
-- One-sentence hook: **Survive 60 seconds while the laws of physics mutate around you.**
+- One-sentence hook: **Control a tiny sun: pull matter, release Novas, bank Flux, and survive six mutating laws in 60 seconds.**
 - The six-cell result artifact is the **Shift Signature**.
 - A text-safe signature uses `O5·F4·W3·E2·S5·N6`.
 - No unverifiable global ranks or percentiles are shown. Sharing compares deterministic seeds, challenger targets, personal bests, attempts, and signatures.

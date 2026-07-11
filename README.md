@@ -1,10 +1,20 @@
 # SOL//SHIFT
 
-**Survive 60 seconds while the laws of physics mutate around you.**
+**Pull matter into orbit, release a Nova, bank Flux, and survive six mutating laws in 60 seconds.**
 
 SOL//SHIFT is a deterministic, touch-first browser game about controlling a living artificial sun. Hold while steering to bend trajectories and capture matter; release to convert that visible configuration into a Nova wave, chain reaction, and recoil. Every ten seconds the same physical toy mutates into a new law: ORBIT, FRACTURE, FLOW, ECHO, SWARM, and NOVA.
 
 The default Daily Shift gives every player the same UTC seed. Endless Shift keeps cycling the laws at increasing difficulty. No account, backend, telemetry, cookies, or network gameplay service is required.
+
+## Goal and scoring loop
+
+1. **Pull:** hold while steering near cyan matter to capture it around the Core.
+2. **Nova:** release the exact captured configuration. More charge and captured mass produce a stronger, more rewarding Nova.
+3. **Chain:** aim loaded Novas through crystals, swarms, and other law-specific targets to multiply Flux.
+4. **Bank:** cross a luminous ring to convert at-risk Flux into permanent score. A hit removes unbanked Flux and one point of Core stability.
+5. **Survive:** clear all six laws, protect the Core's three stability points, and beat the Daily score or your personal best.
+
+The first run teaches this loop in the arena, and its 60-second clock does not begin until the player's first movement or attraction input.
 
 ## Controls
 
@@ -65,7 +75,7 @@ React owns menus, the HUD, results, accessibility, and creator controls. Simulat
 
 ## Performance envelope
 
-The current production client artifact set is approximately **412 KiB raw / 126 KiB gzip**, including framework, game, runtime, and CSS chunks. There is no downloadable font payload. The 1,200×630 social preview is requested independently by crawlers or direct asset access and is not part of the playable client chunk set.
+The current production client artifact set is approximately **436 KiB raw / 132 KiB gzip**, including framework, game, runtime, and CSS chunks. There is no downloadable font payload. The 1,200×630 social preview is requested independently by crawlers or direct asset access and is not part of the playable client chunk set.
 
 Gameplay is fixed at 60 simulation steps per second. Presentation is capped at 60 Hz on high-refresh screens. Capability-based quality configures 48–220 cosmetic-particle slots and 28–84 trail points; reduced motion and measured slow frames lower the active budgets through two additional tiers that also reduce resolution, bloom, shader layers, and fallback geometry without changing deterministic hazards. The simulation caps live entities at 112, cosmetic particles use a fixed 512-slot pool, and each rendering canvas has a 3.2-million-pixel backing budget.
 

@@ -37,8 +37,9 @@ This count describes substantial internal passes, not individual file saves.
 6. **Responsive/accessibility pass** — mobile viewports, safe areas, touch occlusion, orientation/visibility recovery, reduced motion, contrast, focus, mute, and failure fallbacks.
 7. **Adversarial and performance pass** — repeated runs, resize and invalid-state tests, console inspection, allocation review, adaptive quality, object/memory high-water checks, and critical corrections. This pass capped presentation at 60 Hz on high-refresh displays, removed deep world cloning from the render loop, throttled reactive audio updates, bounded canvas backing storage, and made adaptive tiers reduce bloom, shader layers, particles, trails, and fallback path complexity—not only resolution.
 8. **Launch pass** — clean production validation, desktop and phone screenshots, bundle measurements, result/share fallbacks, documentation, launch sequence, conservative benchmark, and Sites hosting handoff.
+9. **Clarity and payoff pass** — a second product audit exposed that the premise was clearer than the scoring loop. The run now waits for first input, teaches pull → loaded Nova → bank in the arena, exposes banked and at-risk Flux, gives every law an actionable directive, differentiates empty and loaded releases in rendering and audio, adds event-level score feedback, and turns results into specific retry coaching.
 
-The final build therefore used **eight major implementation passes**. Within those passes, many smaller tuning and correction cycles occurred.
+The final build therefore used **nine major implementation passes**. Within those passes, many smaller tuning and correction cycles occurred.
 
 ## Parallel studio roles
 
@@ -62,6 +63,7 @@ Examples of changes made because the rendered product was tested rather than mer
 - A performance audit found that high-refresh displays could render above the intended cadence and that each render cloned all entities and trail points. The frame loop now presents at a 60 Hz ceiling while simulation remains fixed-step, and the renderer consumes a synchronous live view while retained test snapshots remain detached.
 - The first adaptive-quality version reduced only backing resolution. The final version also removes bloom, lowers field-shader star layers, shortens trails, reduces particles and fallback geometry, and constrains each canvas to a 3.2-million-pixel backing budget.
 - Clipboard APIs can remain pending in constrained browsers. Copy now has a short timeout and a textarea fallback, so the result panel cannot become stuck waiting on the platform.
+- A post-launch review found that charge, captured mass, banked score, and at-risk Flux were simulated but under-explained. The clarity pass surfaced those values, stopped dismissing guidance on the first pointer press, reserved major audiovisual impact for loaded Novas and chains, and made a collision's lost Flux explicit.
 
 ## Human-authored code
 
@@ -69,10 +71,10 @@ None was supplied. All repository game code, tests, copy, shaders, procedural so
 
 ## Final validation snapshot
 
-- `npm test` passes **40/40 named checks**: 38 deterministic/protocol/UI checks and 2 rendered-entry checks.
+- `npm test` passes **48/48 named checks**: 46 deterministic/protocol/game-feel/UI checks and 2 rendered-entry checks.
 - TypeScript validation and ESLint complete without errors.
 - The production dependency audit (`npm audit --omit=dev`) reports zero known vulnerabilities; Next's nested PostCSS is pinned to a compatible patched 8.5.x release through an npm override.
-- The final production client artifact set is approximately **412 KiB raw / 126 KiB gzip**, with no webfont payload.
+- The final production client artifact set is approximately **436 KiB raw / 132 KiB gzip**, with no webfont payload.
 - The 100-seed deterministic stress stream observed a maximum of **86 live simulation entities** against the hard cap of 112; cosmetic particles, pulses, trails, ECHO history, audio voices, and canvas backing storage are separately bounded.
 - Direct browser QA covered the complete menu/play/pause/result loop, challenge auto-start, result fallbacks, Creator cues and framing, preference persistence, and layouts at desktop, 390×844, and 320×568.
 
