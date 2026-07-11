@@ -2,6 +2,8 @@
 
 **Pull matter into orbit, release a Nova, bank Flux, and survive six mutating laws in 60 seconds.**
 
+**Play:** https://solshift.rameonix.workers.dev
+
 SOL//SHIFT is a deterministic, touch-first browser game about controlling a living artificial sun. Hold while steering to bend trajectories and capture matter; release to convert that visible configuration into a Nova wave, chain reaction, and recoil. Every ten seconds the same physical toy mutates into a new law: ORBIT, FRACTURE, FLOW, ECHO, SWARM, and NOVA.
 
 The default Daily Shift gives every player the same UTC seed. Endless Shift keeps cycling the laws at increasing difficulty. No account, backend, telemetry, cookies, or network gameplay service is required.
@@ -56,10 +58,10 @@ The repository uses vinext and the Sites Vite/Cloudflare Worker build. It requir
 ```bash
 npm ci
 npm test
-npm run build
+npx wrangler deploy -c dist/server/wrangler.json --name solshift
 ```
 
-Deploy the generated Worker-compatible output with Sites, or use the equivalent Cloudflare Worker pipeline. Route all requests to the app entry; challenge state is encoded in validated query parameters rather than separate routes.
+`npm test` produces the Worker build, so run the deploy command in the same authenticated Cloudflare environment. The production Worker is named `solshift` and serves https://solshift.rameonix.workers.dev. Route all requests to the app entry; challenge state is encoded in validated query parameters rather than separate routes.
 
 ## Architecture
 

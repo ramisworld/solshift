@@ -20,7 +20,7 @@ SOL//SHIFT is a touch-first physics survival game built for the browser. Steer a
 
 ## Recommended public URL structure
 
-- Canonical game: connect a standalone SolShift domain, then use that one origin everywhere. Do not publish the account-scoped Sites URL in launch posts.
+- Canonical game: `https://solshift.rameonix.workers.dev`. Use this SolShift-branded production origin everywhere; do not publish the account-scoped Sites URL in launch posts.
 - Daily challenge: append `?v=1&mode=daily&seed=…&target=…&archetype=…` to that origin.
 - Endless challenge: use the same validated format with `mode=endless`.
 - Creator Mode should be entered from the clearly separated menu control; public challenge URLs never enable or inherit Creator state.
@@ -79,7 +79,7 @@ The white-hot Core at the centre of a just-released Nova, with three large cyan 
 
 ### Recommended for a 40-follower account
 
-Pair this with the 15-second clip and replace the placeholder with the branded game URL. Keep the link in the post, reply quickly to every real response, and do not dilute the hook with hashtags.
+Pair this with the 15-second clip. Keep the link in the post, reply quickly to every real response, and do not dilute the hook with hashtags.
 
 > I made a browser game where physics changes every 10 seconds.
 >
@@ -88,7 +88,7 @@ Pair this with the 15-second clip and replace the placeholder with the branded g
 > No login. Works on phone.
 >
 > Can you beat my Daily Shift?
-> [SOLSHIFT URL]
+> https://solshift.rameonix.workers.dev
 
 ### Option 1 — visible result first
 
@@ -135,7 +135,7 @@ Pair this with the 15-second clip and replace the placeholder with the branded g
 
 ## Recommended LinkedIn post
 
-Pair this with the same native 15-second clip and replace the placeholder with the branded game URL.
+Pair this with the same native 15-second clip.
 
 > I just shipped SOL//SHIFT—a browser game where the laws of physics mutate every 10 seconds.
 >
@@ -148,13 +148,13 @@ Pair this with the same native 15-second clip and replace the placeholder with t
 >
 > It now runs as a deterministic 60 Hz simulation with six physics laws, procedural audio, desktop/mobile controls, Daily challenges, shareable results, and 48 automated checks.
 >
-> Try today’s Daily Shift: [SOLSHIFT URL]
+> Try today’s Daily Shift: https://solshift.rameonix.workers.dev
 >
 > I’d love to know your score—and which law ended your run.
 
 ## Suggested playable-link reply
 
-> Play today’s Daily Shift here: [canonical link]
+> Play today’s Daily Shift here: https://solshift.rameonix.workers.dev
 >
 > Works with touch, mouse, or keyboard. Sound begins after your first gesture. No login or install.
 
